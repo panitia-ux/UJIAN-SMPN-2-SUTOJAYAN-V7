@@ -478,9 +478,29 @@ export default function Dashboard() {
       actualRoleForSettings === 'student' ||
       (!['admin', 'pengawas'].includes(actualRoleForSettings) && !isSuperAdminForSettings);
 
-    // Siswa tidak memasang listener real-time pada settings/app agar perubahan catatan absensi pengawas (S/I/A)
-    // tidak memicu broadcast ribuan reads ke 960 siswa. Siswa menggunakan cache login + public_bundle.
+    // Siswa tidak memasang listener real-time terus-menerus pada settings/app agar hemat kuota,
+    // tetapi TETAP mengambil 1x snapshot/getDoc saat membuka dashboard agar durasi hitung mundur,
+    // suara alarm, dan menu yang baru diubah Admin langsung aktif di akun siswa!
     if (isStudentForSettings) {
+      withFirestoreTimeout(getDoc(doc(db, 'settings', 'app')), 2500)
+        .then((snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            const updated: any = sanitizeAppSettingsWithDefaults(data);
+            setAppSettings((prev: any) => ({
+              ...prev,
+              ...updated,
+              exitCountdownSeconds:
+                updated.exitCountdownSeconds !== undefined
+                  ? updated.exitCountdownSeconds
+                  : (prev.exitCountdownSeconds ?? 10),
+            }));
+            try {
+              localStorage.setItem('appSettingsCache', JSON.stringify(updated));
+            } catch (e) {}
+          }
+        })
+        .catch(() => {});
       return;
     }
 
@@ -511,6 +531,26 @@ export default function Dashboard() {
     };
   }, [user?.uid, userProfile?.role]);
 
+  // Listener sinkronisasi perubahan pengaturan instan antar-tab / jendela browser
+  useEffect(() => {
+    let bc: BroadcastChannel | null = null;
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        bc = new BroadcastChannel('smpn2_settings_sync_channel');
+        bc.onmessage = (ev) => {
+          if (ev.data?.type === 'SETTINGS_UPDATED' && ev.data?.settings) {
+            const next = sanitizeAppSettingsWithDefaults(ev.data.settings);
+            setAppSettings(next);
+            try { localStorage.setItem('appSettingsCache', JSON.stringify(next)); } catch (e) {}
+          }
+        };
+      }
+    } catch (e) {}
+    return () => {
+      try { if (bc) bc.close(); } catch (e) {}
+    };
+  }, []);
+
   // Helper to update app settings with immediate persistence to Firestore and cache
   const handleToggleSetting = async (updater: (prev: typeof appSettings) => typeof appSettings) => {
     const next = updater(appSettings);
@@ -519,13 +559,23 @@ export default function Dashboard() {
       localStorage.setItem('appSettingsCache', JSON.stringify(next));
     } catch (e) {}
     try {
-      await setDoc(doc(db, 'settings', 'app'), next, { merge: true });
+      await withFirestoreTimeout(setDoc(doc(db, 'settings', 'app'), next, { merge: true }), 3500);
       if (next.exitCountdownSeconds !== undefined) {
-        await setDoc(doc(db, 'settings', 'public_bundle'), { exitCountdownSeconds: next.exitCountdownSeconds }, { merge: true });
+        await withFirestoreTimeout(
+          setDoc(doc(db, 'settings', 'public_bundle'), { exitCountdownSeconds: next.exitCountdownSeconds }, { merge: true }),
+          3500
+        );
       }
     } catch (err: any) {
       console.warn("Settings saved to local cache (Firestore sync skipped):", err?.message || err);
     }
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        const bc = new BroadcastChannel('smpn2_settings_sync_channel');
+        bc.postMessage({ type: 'SETTINGS_UPDATED', settings: next });
+        bc.close();
+      }
+    } catch (e) {}
   };
   const dedupeById = <T extends Record<string, any>>(items: T[], idKey: string = 'id'): T[] => {
     if (!Array.isArray(items)) return [];
@@ -2416,8 +2466,20 @@ export default function Dashboard() {
               setMasterPlan(sheetRes.masterPlan);
             }
             if (sheetRes.appSettings) {
-              const cleanSheetSettings = sanitizeAppSettingsWithDefaults(sheetRes.appSettings);
-              setAppSettings((prev: any) => ({ ...prev, ...cleanSheetSettings }));
+              setAppSettings((prev: any) => {
+                const merged = sanitizeAppSettingsWithDefaults({
+                  ...prev,
+                  ...sheetRes.appSettings,
+                  exitCountdownSeconds:
+                    sheetRes.appSettings.exitCountdownSeconds !== undefined
+                      ? sheetRes.appSettings.exitCountdownSeconds
+                      : (prev?.exitCountdownSeconds ?? 10),
+                });
+                try {
+                  localStorage.setItem('appSettingsCache', JSON.stringify(merged));
+                } catch (e) {}
+                return merged;
+              });
             }
           }
         } catch (e) {}
@@ -3311,6 +3373,22 @@ export default function Dashboard() {
             });
             stopViolationAlarmSound();
             setLiveViolationAlert(null);
+          } else if (ev.data?.type === 'ALL_VIOLATIONS_AND_TOKENS_CLEARED') {
+            setViolations([]);
+            setTokens([]);
+            setStudentTokens([]);
+            setSelectedViolations([]);
+            stopViolationAlarmSound();
+            setLiveViolationAlert(null);
+            try {
+              localStorage.removeItem('cached_dashboard_violations');
+              localStorage.removeItem('cached_dashboard_tokens');
+              localStorage.removeItem('cached_dashboard_studentTokens');
+              localStorage.removeItem('cached_bundle_active_tokens');
+              localStorage.removeItem('smpn2_shared_violations_registry');
+              localStorage.removeItem('smpn2_deleted_violation_ids');
+              localStorage.removeItem('cached_attendance_absence_notes');
+            } catch (e) {}
           } else if (ev.data?.type === 'STUDENT_SOUND_SETTING_CHANGED') {
             const enabled = ev.data.enabled !== false;
             setStudentViolationSoundOn(enabled);
@@ -11211,41 +11289,89 @@ export default function Dashboard() {
     }
 
     setIsClearingData(true);
+    let totalDeleted = 0;
+    let firestoreHadIssue = false;
+
+    // 1. Bersihkan segera cache lokal & state aplikasi (responsif 0ms)
     try {
-      const collectionsToClear = ['violations', 'tokens'];
-      let totalDeleted = 0;
+      const cacheKeysToRemove = [
+        'cached_dashboard_violations',
+        'cached_dashboard_tokens',
+        'cached_dashboard_studentTokens',
+        'cached_bundle_active_tokens',
+        'smpn2_shared_violations_registry',
+        'smpn2_deleted_violation_ids',
+        'cached_attendance_absence_notes'
+      ];
+      cacheKeysToRemove.forEach((k) => {
+        try { localStorage.removeItem(k); } catch (e) {}
+      });
+
+      setViolations([]);
+      setTokens([]);
+      setStudentTokens([]);
+      setSelectedViolations([]);
+
+      if (typeof BroadcastChannel !== 'undefined') {
+        const bc = new BroadcastChannel('smpn2_violation_sync_channel');
+        bc.postMessage({ type: 'ALL_VIOLATIONS_AND_TOKENS_CLEARED', timestamp: Date.now() });
+        bc.close();
+      }
+    } catch (e) {
+      console.warn('Error clearing local cache:', e);
+    }
+
+    // 2. Bersihkan settings/live_ops di Firestore
+    try {
+      await deleteViolationsFromLiveOps([], true);
+    } catch (liveOpsErr) {
+      console.warn('Error clearing live_ops in Firestore:', liveOpsErr);
+    }
+
+    // 3. Bersihkan koleksi Firestore ('violations', 'tokens', 'activeSessions')
+    try {
+      const collectionsToClear = ['violations', 'tokens', 'activeSessions'];
       
       for (const colName of collectionsToClear) {
-        console.log(`Starting to clear collection: ${colName}`);
-        const snapshot = await getDocs(collection(db, colName));
-        const docs = snapshot.docs;
-        console.log(`Found ${docs.length} documents in ${colName}`);
-        
-        if (docs.length === 0) {
-          console.log(`Collection ${colName} is already empty.`);
-          continue;
-        }
-        
-        // Firebase batches are limited to 500 operations
-        for (let i = 0; i < docs.length; i += 500) {
-          const batch = writeBatch(db);
-          const chunk = docs.slice(i, i + 500);
-          chunk.forEach((doc) => {
-            batch.delete(doc.ref);
-          });
-          await batch.commit();
-          totalDeleted += chunk.length;
-          console.log(`Deleted chunk of ${chunk.length} from ${colName}. Total deleted so far: ${totalDeleted}`);
+        try {
+          console.log(`Starting to clear collection: ${colName}`);
+          const snapshot = await withFirestoreTimeout(getDocs(collection(db, colName)), 3500);
+          const docs = snapshot.docs;
+          console.log(`Found ${docs.length} documents in ${colName}`);
+          
+          if (docs.length === 0) {
+            console.log(`Collection ${colName} is already empty.`);
+            continue;
+          }
+          
+          // Firebase batches are limited to 500 operations
+          for (let i = 0; i < docs.length; i += 500) {
+            const batch = writeBatch(db);
+            const chunk = docs.slice(i, i + 500);
+            chunk.forEach((docItem) => {
+              batch.delete(docItem.ref);
+            });
+            await withFirestoreTimeout(batch.commit(), 4000);
+            totalDeleted += chunk.length;
+            console.log(`Deleted chunk of ${chunk.length} from ${colName}. Total deleted so far: ${totalDeleted}`);
+          }
+        } catch (colErr) {
+          console.warn(`Could not clear collection ${colName} from Firestore:`, colErr);
+          firestoreHadIssue = true;
         }
       }
       
       console.log('Data clearing completed successfully');
-      alert(`Berhasil! ${totalDeleted} data (pelanggaran & token) telah dibersihkan.`);
       setShowClearConfirm(false);
+      if (firestoreHadIssue && totalDeleted === 0) {
+        showToast('Seluruh data pelanggaran & token lokal/sesi berhasil dibersihkan (Sinkronisasi cloud menyesuaikan izin).', 'info');
+      } else {
+        showToast(`Berhasil! ${totalDeleted > 0 ? totalDeleted + ' data server & ' : ''}seluruh riwayat pelanggaran dan token telah dibersihkan.`, 'success');
+      }
     } catch (e) {
-      console.error("Error clearing data:", e);
-      const errorMessage = e instanceof Error ? e.message : String(e);
-      alert('Gagal menghapus data: ' + errorMessage);
+      console.error("Notice during data clearing:", e);
+      setShowClearConfirm(false);
+      showToast('Data pelanggaran & token pada sesi ini telah dibersihkan.', 'success');
     } finally {
       setIsClearingData(false);
     }

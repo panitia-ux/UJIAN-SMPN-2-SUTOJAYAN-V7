@@ -507,7 +507,7 @@ export const sanitizeAppSettingsWithDefaults = (raw?: any) => {
     allowStudentSelfReactivateToken: Boolean(bSettings.allowStudentSelfReactivateToken),
     studentViolationSoundEnabled: bSettings.studentViolationSoundEnabled !== false,
     exitCountdownSeconds:
-      typeof bSettings.exitCountdownSeconds === 'number' && bSettings.exitCountdownSeconds >= 1
+      typeof bSettings.exitCountdownSeconds === 'number' && bSettings.exitCountdownSeconds >= 1 && bSettings.exitCountdownSeconds !== 7
         ? Math.min(120, Math.round(bSettings.exitCountdownSeconds))
         : 10,
     attendanceAbsenceNotes: bSettings.attendanceAbsenceNotes || {},

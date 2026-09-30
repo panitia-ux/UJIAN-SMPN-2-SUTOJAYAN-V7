@@ -2,7 +2,7 @@
   "exportedAt": "2026-09-30T05:11:54.817Z",
   "appSettings": {
     "title": "UPT SMPN 2 SUTOJAYAN",
-    "exitCountdownSeconds": 7,
+    "exitCountdownSeconds": 10,
     "allowStudentEditAcademic": true,
     "studentViolationSoundEnabled": true,
     "allowStudentProfileEdit": true,
@@ -23545,7 +23545,7 @@
         "supervisorEmail": ""
       }
     ],
-    "exitCountdownSeconds": 7,
+    "exitCountdownSeconds": 10,
     "subjects": [
       {
         "id": "4r2DrXDRdTO65VjE3Ho0",

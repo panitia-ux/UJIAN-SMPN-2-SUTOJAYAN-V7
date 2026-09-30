@@ -245,9 +245,18 @@ function AuthScreen() {
           addUsersToMap(sheetRes.value.users);
         }
         if (sheetRes.value.appSettings) {
-          const cleanSheetSettings = sanitizeAppSettingsWithDefaults(sheetRes.value.appSettings);
-          setAppSettings(cleanSheetSettings);
-          try { localStorage.setItem('appSettingsCache', JSON.stringify(cleanSheetSettings)); } catch (e) {}
+          setAppSettings((prev: any) => {
+            const merged = sanitizeAppSettingsWithDefaults({
+              ...prev,
+              ...sheetRes.value.appSettings,
+              exitCountdownSeconds:
+                sheetRes.value.appSettings.exitCountdownSeconds !== undefined
+                  ? sheetRes.value.appSettings.exitCountdownSeconds
+                  : (prev?.exitCountdownSeconds ?? 10),
+            });
+            try { localStorage.setItem('appSettingsCache', JSON.stringify(merged)); } catch (e) {}
+            return merged;
+          });
         }
       }
 
