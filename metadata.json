@@ -1,0 +1,10 @@
+{
+  "name": "UJIAN SMPN 2 SUTOJAYAN V7",
+  "description": "UJIAN SMPN 2 SUTOJAYAN V7",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

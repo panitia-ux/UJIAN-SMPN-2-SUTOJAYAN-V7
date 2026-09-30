@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <script>
+      (function () {
+        var origStringify = JSON.stringify;
+        JSON.stringify = function (value, replacer, space) {
+          try {
+            return origStringify.call(JSON, value, replacer, space);
+          } catch (err) {
+            if (err && err instanceof TypeError) {
+              var seen = new WeakSet();
+              return origStringify.call(
+                JSON,
+                value,
+                function (key, val) {
+                  if (typeof val === 'object' && val !== null) {
+                    if (seen.has(val)) return '[Circular]';
+                    seen.add(val);
+                  }
+                  return typeof replacer === 'function' ? replacer.call(this, key, val) : val;
+                },
+                space
+              );
+            }
+            throw err;
+          }
+        };
+        window.addEventListener('error', function (event) {
+          var msg = String((event && (event.message || (event.error && event.error.message))) || '');
+          if (msg.indexOf('INTERNAL ASSERTION FAILED') !== -1 || msg.indexOf('Unexpected state') !== -1) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        }, true);
+        window.addEventListener('unhandledrejection', function (event) {
+          var reason = event && event.reason;
+          var msg = String((reason && (reason.message || reason)) || '');
+          if (msg.indexOf('INTERNAL ASSERTION FAILED') !== -1 || msg.indexOf('Unexpected state') !== -1) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        }, true);
+      })();
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Remix Remix NEW APLIKASI UJIAN</title>
+    <meta name="description" content="A secure, real-time anti-cheat exam system with role-based access control, monitoring, and automated violation detection." />
+    <meta property="og:title" content="Remix Remix NEW APLIKASI UJIAN" />
+    <meta property="og:description" content="A secure, real-time anti-cheat exam system with role-based access control, monitoring, and automated violation detection." />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
