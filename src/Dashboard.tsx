@@ -54,7 +54,10 @@ import {
   Volume2,
   VolumeX,
   BellRing,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Database,
+  Cloud,
+  CloudDownload
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
@@ -416,6 +419,19 @@ const withFirestoreTimeout = <T,>(promise: Promise<T>, timeoutMs = 2800): Promis
   });
 };
 
+const cleanDataForFirestore = (obj: any): any => {
+  if (obj === undefined) return null;
+  if (obj === null || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(cleanDataForFirestore);
+  const res: Record<string, any> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) {
+      res[k] = cleanDataForFirestore(v);
+    }
+  }
+  return res;
+};
+
 export default function Dashboard() {
   const { user, userProfile, logout, resetPassword, loading, isProfileLoading, updateLocalUserProfile } = useAuth();
   const [activeTab, setActiveTab] = useState('home');
@@ -554,15 +570,17 @@ export default function Dashboard() {
   // Helper to update app settings with immediate persistence to Firestore and cache
   const handleToggleSetting = async (updater: (prev: typeof appSettings) => typeof appSettings) => {
     const next = updater(appSettings);
-    setAppSettings(next);
+    const sanitized = sanitizeAppSettingsWithDefaults(next);
+    const cleanPayload = cleanDataForFirestore(sanitized);
+    setAppSettings(sanitized);
     try {
-      localStorage.setItem('appSettingsCache', JSON.stringify(next));
+      localStorage.setItem('appSettingsCache', JSON.stringify(cleanPayload));
     } catch (e) {}
     try {
-      await withFirestoreTimeout(setDoc(doc(db, 'settings', 'app'), next, { merge: true }), 3500);
-      if (next.exitCountdownSeconds !== undefined) {
+      await withFirestoreTimeout(setDoc(doc(db, 'settings', 'app'), cleanPayload, { merge: true }), 3500);
+      if (cleanPayload.exitCountdownSeconds !== undefined) {
         await withFirestoreTimeout(
-          setDoc(doc(db, 'settings', 'public_bundle'), { exitCountdownSeconds: next.exitCountdownSeconds }, { merge: true }),
+          setDoc(doc(db, 'settings', 'public_bundle'), { exitCountdownSeconds: cleanPayload.exitCountdownSeconds }, { merge: true }),
           3500
         );
       }
@@ -572,11 +590,127 @@ export default function Dashboard() {
     try {
       if (typeof BroadcastChannel !== 'undefined') {
         const bc = new BroadcastChannel('smpn2_settings_sync_channel');
-        bc.postMessage({ type: 'SETTINGS_UPDATED', settings: next });
+        bc.postMessage({ type: 'SETTINGS_UPDATED', settings: cleanPayload });
         bc.close();
       }
     } catch (e) {}
   };
+
+  const [isSyncingSettings, setIsSyncingSettings] = useState(false);
+
+  // Tarik Pengaturan Terbaru dari Cloud Database agar semua komputer/browser admin langsung sinkron identik
+  const handleSyncSettingsFromCloud = useCallback(async (showFeedback = true) => {
+    setIsSyncingSettings(true);
+    try {
+      let cloudSettings: any = null;
+      try {
+        const appSnap = await withFirestoreTimeout(getDoc(doc(db, 'settings', 'app')), 3500);
+        if (appSnap.exists()) {
+          cloudSettings = appSnap.data();
+        }
+      } catch (err) {}
+
+      if (!cloudSettings) {
+        try {
+          const bundleSnap = await withFirestoreTimeout(getDoc(doc(db, 'settings', 'public_bundle')), 3500);
+          if (bundleSnap.exists()) {
+            cloudSettings = bundleSnap.data();
+          }
+        } catch (err) {}
+      }
+
+      if (cloudSettings) {
+        const cleanSettings = sanitizeAppSettingsWithDefaults(cloudSettings);
+        setAppSettings(cleanSettings);
+        try {
+          localStorage.setItem('appSettingsCache', JSON.stringify(cleanSettings));
+        } catch (e) {}
+        try {
+          if (typeof BroadcastChannel !== 'undefined') {
+            const bc = new BroadcastChannel('smpn2_settings_sync_channel');
+            bc.postMessage({ type: 'SETTINGS_UPDATED', settings: cleanSettings });
+            bc.close();
+          }
+        } catch (e) {}
+        if (showFeedback) {
+          showToast('Pengaturan berhasil disinkronkan dari server Cloud Database!', 'success');
+        }
+        return cleanSettings;
+      } else {
+        if (showFeedback) {
+          showToast('Data pengaturan cloud telah sesuai dengan perangkat ini.', 'info');
+        }
+      }
+    } catch (e: any) {
+      console.warn('Notice syncing settings from cloud:', e);
+      if (showFeedback) {
+        showToast('Tidak dapat menarik pengaturan dari cloud: ' + (e?.message || e), 'error');
+      }
+    } finally {
+      setIsSyncingSettings(false);
+    }
+    return null;
+  }, []);
+
+  // Simpan Pengaturan Resmi ke Cloud Database & Sebarkan ke Seluruh Perangkat/Browser
+  const handleSaveSettingsToCloud = async () => {
+    setIsSavingSettings(true);
+    try {
+      const sanitized = sanitizeAppSettingsWithDefaults(appSettings);
+      const cleanPayload = cleanDataForFirestore(sanitized);
+
+      // 1. Simpan ke Cache Lokal Perangkat ini
+      try {
+        localStorage.setItem('appSettingsCache', JSON.stringify(cleanPayload));
+      } catch (e) {}
+
+      // 2. Simpan ke Database Utama Cloud (doc settings/app dan settings/public_bundle)
+      await Promise.all([
+        withFirestoreTimeout(setDoc(doc(db, 'settings', 'app'), cleanPayload, { merge: true }), 4000),
+        withFirestoreTimeout(
+          setDoc(
+            doc(db, 'settings', 'public_bundle'),
+            {
+              exitCountdownSeconds: cleanPayload.exitCountdownSeconds ?? 10,
+              studentViolationSoundEnabled: cleanPayload.studentViolationSoundEnabled !== false,
+              title: cleanPayload.title || 'UPT SMPN 2 SUTOJAYAN',
+              allowStudentProfileEdit: cleanPayload.allowStudentProfileEdit !== false,
+              allowSupervisorProfileEdit: cleanPayload.allowSupervisorProfileEdit !== false,
+              allowStudentSelfReactivateToken: Boolean(cleanPayload.allowStudentSelfReactivateToken),
+              allowStudentEditAcademic: Boolean(cleanPayload.allowStudentEditAcademic),
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          ),
+          4000
+        ),
+      ]);
+
+      // 3. Siarkan perubahan ke seluruh tab/jendela yang sedang terbuka
+      try {
+        if (typeof BroadcastChannel !== 'undefined') {
+          const bc = new BroadcastChannel('smpn2_settings_sync_channel');
+          bc.postMessage({ type: 'SETTINGS_UPDATED', settings: cleanPayload });
+          bc.close();
+        }
+      } catch (e) {}
+
+      showToast('Pengaturan berhasil disimpan ke Cloud Database & disinkronkan ke seluruh perangkat!', 'success');
+    } catch (error: any) {
+      console.warn("Could not sync settings to Firestore:", error?.message || error);
+      showToast('Tersimpan di lokal (Gagal koneksi ke server cloud). Silakan gunakan tombol "Sinkronkan dari Cloud" nanti.', 'info');
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
+  // Saat Admin membuka tab Pengaturan di perangkat mana pun, otomatis tarik pengaturan cloud terbaru
+  useEffect(() => {
+    const isUserAdminRole = (userProfile?.role || '').toLowerCase().trim() === 'admin' || isSuperAdminEmail(user?.email) || isSuperAdminEmail(userProfile?.email);
+    if (activeTab === 'settings' && isUserAdminRole) {
+      handleSyncSettingsFromCloud(false);
+    }
+  }, [activeTab, userProfile?.role, user?.email, userProfile?.email, handleSyncSettingsFromCloud]);
   const dedupeById = <T extends Record<string, any>>(items: T[], idKey: string = 'id'): T[] => {
     if (!Array.isArray(items)) return [];
     const map = new Map<string, T>();
@@ -18792,6 +18926,16 @@ export default function Dashboard() {
               <div className="flex flex-wrap items-center gap-2 shrink-0">
                 <button
                   type="button"
+                  onClick={() => handleSyncSettingsFromCloud(true)}
+                  disabled={isSyncingSettings}
+                  className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-md shadow-blue-100 transition-all cursor-pointer disabled:opacity-50"
+                  title="Tarik data pengaturan terbaru yang disimpan Admin di komputer/perangkat lain"
+                >
+                  <RefreshCw size={16} className={isSyncingSettings ? 'animate-spin' : ''} />
+                  <span>{isSyncingSettings ? 'Menyinkronkan...' : 'Sinkronkan dari Cloud'}</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => setActiveTab('custom_portal')}
                   className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-md shadow-emerald-100 transition-all cursor-pointer"
                 >
@@ -19429,28 +19573,40 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              <button 
-                onClick={async () => {
-                  setIsSavingSettings(true);
-                  try {
-                    localStorage.setItem('appSettingsCache', JSON.stringify(appSettings));
-                  } catch (e) {}
-                  try {
-                    await setDoc(doc(db, 'settings', 'app'), appSettings, { merge: true });
-                    showToast('Pengaturan berhasil disimpan!', 'success');
-                  } catch (error: any) {
-                    console.warn("Settings saved to local cache:", error?.message || error);
-                    showToast('Pengaturan disimpan di perangkat lokal.', 'info');
-                  } finally {
-                    setIsSavingSettings(false);
-                  }
-                }}
-                disabled={isSavingSettings}
-                className={`w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl transition-all shadow-lg shadow-blue-100 flex items-center justify-center gap-2 ${isSavingSettings ? 'opacity-70 cursor-not-allowed' : ''}`}
-              >
-                {isSavingSettings ? <RefreshCw size={20} className="animate-spin" /> : <CheckCircle2 size={20} />}
-                {isSavingSettings ? 'Menyimpan...' : 'Simpan Perubahan / Save Changes'}
-              </button>
+              <div className="bg-blue-50/80 border border-blue-200 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-blue-950 shadow-xs">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-11 h-11 rounded-2xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-blue-200">
+                    <Database size={22} />
+                  </div>
+                  <div>
+                    <p className="font-bold text-blue-900 text-sm">Sinkronisasi Cloud Antar-Komputer & Perangkat</p>
+                    <p className="text-xs text-blue-700 mt-0.5">
+                      Pengaturan ini tersimpan di Cloud Database (Firestore). Jika Anda membuka dari komputer atau browser lain, klik <strong>Tarik dari Cloud</strong> agar setelan selalu identik.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2.5 w-full sm:w-auto shrink-0">
+                  <button 
+                    type="button"
+                    onClick={() => handleSyncSettingsFromCloud(true)}
+                    disabled={isSyncingSettings || isSavingSettings}
+                    className="flex-1 sm:flex-initial px-4 py-3 bg-white hover:bg-blue-50 text-blue-700 border border-blue-300 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-xs disabled:opacity-50 cursor-pointer"
+                    title="Ambil data pengaturan terbaru yang telah disimpan di server cloud"
+                  >
+                    <RefreshCw size={16} className={isSyncingSettings ? 'animate-spin' : ''} />
+                    <span>{isSyncingSettings ? 'Menyinkronkan...' : 'Tarik dari Cloud'}</span>
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={handleSaveSettingsToCloud}
+                    disabled={isSavingSettings || isSyncingSettings}
+                    className="flex-1 sm:flex-initial px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-md shadow-blue-200 disabled:opacity-50 cursor-pointer"
+                  >
+                    {isSavingSettings ? <RefreshCw size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+                    <span>{isSavingSettings ? 'Menyimpan...' : 'Simpan ke Cloud & Semua Perangkat'}</span>
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-sm space-y-6">
