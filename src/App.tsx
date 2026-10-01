@@ -6,7 +6,7 @@
 import { AuthProvider, useAuth } from './AuthContext';
 import Dashboard from './Dashboard';
 import RegistrationOnboarding from './RegistrationOnboarding';
-import { Shield, LogIn, Mail, Lock, User, ArrowRight, AlertCircle, AlertTriangle, RefreshCw, CheckCircle2, Database } from 'lucide-react';
+import { Shield, LogIn, Mail, Lock, User, ArrowRight, AlertCircle, AlertTriangle, RefreshCw, CheckCircle2, Database, Eye, EyeOff } from 'lucide-react';
 import * as React from 'react';
 import { useState, ErrorInfo, ReactNode, Component, useEffect } from 'react';
 import { db } from './firebase';
@@ -89,6 +89,8 @@ function AuthScreen() {
   const [showManualLogin, setShowManualLogin] = useState(false);
   const [rosterIdentifier, setRosterIdentifier] = useState('');
   const [rosterPassword, setRosterPassword] = useState('');
+  const [showRosterPassword, setShowRosterPassword] = useState(false);
+  const [showManualPassword, setShowManualPassword] = useState(false);
   const [catalogUsersState, setCatalogUsersState] = useState<any[]>(() => {
     try {
       const c1 = localStorage.getItem('cached_roster_catalog');
@@ -652,13 +654,22 @@ function AuthScreen() {
               <div className="relative">
                 <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-blue-600" size={18} />
                 <input
-                  type="password"
+                  type={showRosterPassword ? "text" : "password"}
                   required
                   placeholder="Masukkan password Anda"
                   value={rosterPassword}
                   onChange={(e) => setRosterPassword(e.target.value)}
-                  className="w-full pl-11 pr-4 py-3 bg-white border border-blue-200 rounded-xl text-sm font-semibold text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                  className="w-full pl-11 pr-11 py-3 bg-white border border-blue-200 rounded-xl text-sm font-semibold text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowRosterPassword(prev => !prev)}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-blue-600 transition-colors p-1 rounded-lg focus:outline-none cursor-pointer"
+                  title={showRosterPassword ? "Sembunyikan password" : "Lihat password"}
+                  aria-label={showRosterPassword ? "Sembunyikan password" : "Lihat password"}
+                >
+                  {showRosterPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
               </div>
             </div>
 
@@ -807,13 +818,22 @@ function AuthScreen() {
               <div className="relative">
                 <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                 <input
-                  type="password"
+                  type={showManualPassword ? "text" : "password"}
                   required
                   placeholder="••••••••"
-                  className="w-full pl-12 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                  className="w-full pl-12 pr-11 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowManualPassword(prev => !prev)}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700 transition-colors p-1 rounded-lg focus:outline-none cursor-pointer"
+                  title={showManualPassword ? "Sembunyikan password" : "Lihat password"}
+                  aria-label={showManualPassword ? "Sembunyikan password" : "Lihat password"}
+                >
+                  {showManualPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
               </div>
             </div>
 
