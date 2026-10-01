@@ -3669,6 +3669,26 @@ export default function Dashboard() {
     }
   };
 
+  const safeUpdateMasterPlanDay = useCallback((dayId: string, payload: any) => {
+    if (!dayId || String(dayId).startsWith('local_')) return Promise.resolve();
+    const dayObj = masterPlan.find(d => d.id === dayId);
+    const docData: any = {
+      ...(dayObj ? {
+        name: dayObj.name || '',
+        date: dayObj.date || '',
+        sessions: dayObj.sessions || [],
+      } : {}),
+      ...payload,
+      updatedAt: serverTimestamp()
+    };
+    return withFirestoreTimeout(
+      setDoc(doc(db, 'master_plan', dayId), docData, { merge: true }),
+      3500
+    ).catch(err => {
+      console.warn(`safeUpdateMasterPlanDay non-fatal warning for ${dayId}:`, err);
+    });
+  }, [masterPlan]);
+
   const handleUpdateScheduleCell = async (id: string, field: string, value: any, supervisorEmail?: string, keepOpen: boolean = false) => {
     try {
       // Helper function to safely parse dates in various formats
@@ -3753,7 +3773,7 @@ export default function Dashboard() {
         } else {
           updateData[field] = value;
         }
-        await updateDoc(doc(db, 'schedules', id), updateData);
+        await setDoc(doc(db, 'schedules', id), updateData, { merge: true });
 
         // Sync back to Master Plan if linked
         const schedule = schedules.find(s => s.id === id);
@@ -3770,7 +3790,7 @@ export default function Dashboard() {
                 const timeStr = parsedDate.getHours().toString().padStart(2, '0') + ':' + parsedDate.getMinutes().toString().padStart(2, '0');
                 
                 if (dateStr !== day.date) {
-                  await updateDoc(doc(db, 'master_plan', day.id), { date: dateStr });
+                  await safeUpdateMasterPlanDay(day.id, { date: dateStr });
                 }
                 session.startTime = timeStr;
               }
@@ -3785,7 +3805,7 @@ export default function Dashboard() {
             }
 
             newSessions[schedule.sessionIndex] = session;
-            await updateDoc(doc(db, 'master_plan', day.id), { sessions: newSessions });
+            await safeUpdateMasterPlanDay(day.id, { sessions: newSessions });
           }
         }
 
@@ -3823,7 +3843,7 @@ export default function Dashboard() {
 
   const handleToggleScheduleStatus = async (id: string, currentStatus: boolean) => {
     try {
-      await updateDoc(doc(db, 'schedules', id), { isActive: !currentStatus });
+      await setDoc(doc(db, 'schedules', id), { isActive: !currentStatus }, { merge: true });
     } catch (error) {
       console.error("Error toggling schedule status:", error);
     }
@@ -4375,7 +4395,7 @@ export default function Dashboard() {
           }
 
           setMasterPlan(prev => prev.map(d => d.id === foundExistingDay.id ? { ...d, ...updatePayload } : d));
-          await withFirestoreTimeout(updateDoc(doc(db, 'master_plan', foundExistingDay.id), updatePayload), 2800);
+          await safeUpdateMasterPlanDay(foundExistingDay.id, updatePayload);
           return;
         } else {
           // Exam date moved to a different date while old day still has other exams:
@@ -4398,7 +4418,7 @@ export default function Dashboard() {
             return nextSession;
           });
           setMasterPlan(prev => prev.map(d => d.id === foundExistingDay.id ? { ...d, sessions: cleanedOldSessions } : d));
-          await withFirestoreTimeout(updateDoc(doc(db, 'master_plan', foundExistingDay.id), { sessions: cleanedOldSessions }), 2800);
+          await safeUpdateMasterPlanDay(foundExistingDay.id, { sessions: cleanedOldSessions });
         }
       }
 
@@ -4467,7 +4487,7 @@ export default function Dashboard() {
         }
 
         setMasterPlan(prev => prev.map(d => d.id === targetDay.id ? { ...d, sessions: existingSessions } : d));
-        await withFirestoreTimeout(updateDoc(doc(db, 'master_plan', targetDay.id), { sessions: existingSessions }), 2800);
+        await safeUpdateMasterPlanDay(targetDay.id, { sessions: existingSessions });
       } else {
         // Create a new Day in master_plan for this exam's date
         const dObj = new Date(dateStr + 'T00:00:00');
@@ -4520,7 +4540,7 @@ export default function Dashboard() {
     try {
       const currentDayObj = masterPlan.find(d => d.id === id);
       setMasterPlan(prev => prev.map(d => d.id === id ? { ...d, ...data } : d));
-      await updateDoc(doc(db, 'master_plan', id), data);
+      await safeUpdateMasterPlanDay(id, data);
 
       // If the Day's date changed, automatically sync all linked Exams in Menu Ujian to the new date!
       if (data.date && currentDayObj) {
@@ -4683,9 +4703,7 @@ export default function Dashboard() {
     // Optimistic: instantly show in UI
     setMasterPlan(prev => prev.map(d => d.id === dayId ? { ...d, sessions: updatedSessions } : d));
 
-    updateDoc(doc(db, 'master_plan', dayId), { sessions: updatedSessions }).catch(err => {
-      console.error("Error adding session to day:", err);
-    });
+    safeUpdateMasterPlanDay(dayId, { sessions: updatedSessions });
   };
 
   const handleDeleteSessionFromDay = async (dayId: string, sIdx: number) => {
@@ -4700,9 +4718,7 @@ export default function Dashboard() {
     setMasterPlan(prev => prev.map(d => d.id === dayId ? { ...d, sessions: updatedSessions } : d));
     setSchedules(prev => prev.filter(s => !(s.masterPlanId === dayId && s.sessionIndex === sIdx)));
 
-    updateDoc(doc(db, 'master_plan', dayId), { sessions: updatedSessions }).catch(err => {
-      console.error("Error deleting session:", err);
-    });
+    safeUpdateMasterPlanDay(dayId, { sessions: updatedSessions });
 
     const related = schedules.filter(s => s.masterPlanId === dayId && s.sessionIndex === sIdx);
     if (related.length > 0) {
@@ -4730,9 +4746,7 @@ export default function Dashboard() {
     // Optimistic: instantly show duplicate
     setMasterPlan(prev => prev.map(d => d.id === dayId ? { ...d, sessions: updatedSessions } : d));
 
-    updateDoc(doc(db, 'master_plan', dayId), { sessions: updatedSessions }).catch(err => {
-      console.error("Error duplicating session:", err);
-    });
+    safeUpdateMasterPlanDay(dayId, { sessions: updatedSessions });
   };
 
   const handleUpdateGradeCell = async (dayId: string, sIdx: number, grade: string, field: string, value: any) => {
@@ -4822,9 +4836,7 @@ export default function Dashboard() {
       try { localStorage.setItem('cached_dashboard_masterPlan', JSON.stringify(next)); } catch (e) {}
       return next;
     });
-    await updateDoc(doc(db, 'master_plan', dayId), { sessions: updatedSessions }).catch(err => {
-      console.error("Error updating grade cell:", err);
-    });
+    await safeUpdateMasterPlanDay(dayId, { sessions: updatedSessions });
 
     // TWO-WAY SYNC: Update the linked Exam's startTime & endTime in Menu Ujian (`exams` collection)
     if (linkedExam && day.date) {
@@ -4887,9 +4899,7 @@ export default function Dashboard() {
       try { localStorage.setItem('cached_dashboard_masterPlan', JSON.stringify(next)); } catch (e) {}
       return next;
     });
-    updateDoc(doc(db, 'master_plan', dayId), { sessions: updatedSessions }).catch(err => {
-      console.error("Error adding grade row to session:", err);
-    });
+    safeUpdateMasterPlanDay(dayId, { sessions: updatedSessions });
     showToast(`Baris "${newGrade}" ditambahkan ke ${session.name || `Sesi ${sIdx + 1}`}.`, 'info');
   };
 
@@ -4916,9 +4926,7 @@ export default function Dashboard() {
       try { localStorage.setItem('cached_dashboard_masterPlan', JSON.stringify(next)); } catch (e) {}
       return next;
     });
-    updateDoc(doc(db, 'master_plan', dayId), { sessions: updatedSessions }).catch(err => {
-      console.error("Error deleting grade row from session:", err);
-    });
+    safeUpdateMasterPlanDay(dayId, { sessions: updatedSessions });
     showToast(`Baris "${removedGrade}" dihapus dari ${session.name || `Sesi ${sIdx + 1}`}.`, 'info');
   };
 
@@ -4955,9 +4963,7 @@ export default function Dashboard() {
       try { localStorage.setItem('cached_dashboard_masterPlan', JSON.stringify(next)); } catch (e) {}
       return next;
     });
-    updateDoc(doc(db, 'master_plan', dayId), { sessions: updatedSessions }).catch(err => {
-      console.error("Error changing grade row key:", err);
-    });
+    safeUpdateMasterPlanDay(dayId, { sessions: updatedSessions });
   };
 
   const handlePresetSessionGrades = async (
@@ -5019,9 +5025,7 @@ export default function Dashboard() {
       try { localStorage.setItem('cached_dashboard_masterPlan', JSON.stringify(next)); } catch (e) {}
       return next;
     });
-    updateDoc(doc(db, 'master_plan', dayId), { sessions: updatedSessions }).catch(err => {
-      console.error("Error applying grade preset:", err);
-    });
+    safeUpdateMasterPlanDay(dayId, { sessions: updatedSessions });
     showToast(
       preset === 'merge_all'
         ? 'Kelas VII, VIII & IX berhasil digabung menjadi 1 baris.'
@@ -5175,9 +5179,7 @@ export default function Dashboard() {
       broadcastMasterPlanUpdate(next);
       return next;
     });
-    updateDoc(doc(db, 'master_plan', dayId), { sessions: updatedSessions }).catch(err => {
-      console.error("Error updating supervisor row:", err);
-    });
+    safeUpdateMasterPlanDay(dayId, { sessions: updatedSessions });
   };
 
   const handleToggleSecondSupervisorAllRooms = async (dayId: string, sIdx: number, enable: boolean) => {
@@ -5202,9 +5204,7 @@ export default function Dashboard() {
       broadcastMasterPlanUpdate(next);
       return next;
     });
-    updateDoc(doc(db, 'master_plan', dayId), { sessions: updatedSessions }).catch(err => {
-      console.error("Error toggling second supervisor:", err);
-    });
+    safeUpdateMasterPlanDay(dayId, { sessions: updatedSessions });
     showToast(
       enable
         ? 'Slot Pengawas 2 diaktifkan untuk seluruh ruang pada sesi ini.'
@@ -5249,9 +5249,7 @@ export default function Dashboard() {
       broadcastMasterPlanUpdate(next);
       return next;
     });
-    updateDoc(doc(db, 'master_plan', dayId), { sessions: updatedSessions }).catch(err => {
-      console.error("Error adding supervisor row:", err);
-    });
+    safeUpdateMasterPlanDay(dayId, { sessions: updatedSessions });
   };
 
   const handleDeleteRoomSupervisorRow = async (dayId: string, sIdx: number, rowIdx: number) => {
@@ -5281,9 +5279,7 @@ export default function Dashboard() {
       broadcastMasterPlanUpdate(next);
       return next;
     });
-    updateDoc(doc(db, 'master_plan', dayId), { sessions: updatedSessions }).catch(err => {
-      console.error("Error deleting supervisor row:", err);
-    });
+    safeUpdateMasterPlanDay(dayId, { sessions: updatedSessions });
   };
 
   const handleAutoFillAllRooms = async (dayId: string, sIdx: number, customCount: number = 30) => {
@@ -5331,9 +5327,7 @@ export default function Dashboard() {
       broadcastMasterPlanUpdate(next);
       return next;
     });
-    updateDoc(doc(db, 'master_plan', dayId), { sessions: updatedSessions }).catch(err => {
-      console.error("Error autofilling rooms:", err);
-    });
+    safeUpdateMasterPlanDay(dayId, { sessions: updatedSessions });
   };
 
   const handleClearAllRoomSupervisors = async (dayId: string, sIdx: number) => {
@@ -5358,9 +5352,7 @@ export default function Dashboard() {
       broadcastMasterPlanUpdate(next);
       return next;
     });
-    updateDoc(doc(db, 'master_plan', dayId), { sessions: updatedSessions }).catch(err => {
-      console.error("Error clearing supervisors:", err);
-    });
+    safeUpdateMasterPlanDay(dayId, { sessions: updatedSessions });
   };
 
   const handleUpdateSessionCell = async (dayId: string, sIdx: number, field: string, value: any) => {
@@ -5390,7 +5382,7 @@ export default function Dashboard() {
       broadcastMasterPlanUpdate(next);
       return next;
     });
-    await updateDoc(doc(db, 'master_plan', dayId), { sessions: updatedSessions });
+    await safeUpdateMasterPlanDay(dayId, { sessions: updatedSessions });
 
     // Sync to schedules collection for real-time supervisor & student queries
     try {
@@ -5404,7 +5396,7 @@ export default function Dashboard() {
           // Find linked schedule
           const linked = schedules.find(s => s.masterPlanId === dayId && s.sessionIndex === sIdx);
           if (linked) {
-            await updateDoc(doc(db, 'schedules', linked.id), {
+            await setDoc(doc(db, 'schedules', linked.id), {
               startTime: startTimeTs,
               supervisorEmail: session.supervisorEmail || '',
               supervisorName: session.supervisorName || '',
@@ -5414,7 +5406,7 @@ export default function Dashboard() {
               className: (session.classes || []).join(', '),
               examTitle: session.name || `Sesi ${sIdx + 1}`,
               isActive: true
-            });
+            }, { merge: true });
           } else if (session.supervisorEmail || session.roomName || session.subjectId) {
             await addDoc(collection(db, 'schedules'), {
               masterPlanId: dayId,
@@ -9081,16 +9073,10 @@ export default function Dashboard() {
           Array.from(touchedDayIds).map(dayId => {
             const dayObj = nextMasterPlan.find(d => d.id === dayId);
             if (!dayObj) return Promise.resolve();
-            if (newDaysMap.has(dayId)) {
-              return setDoc(doc(db, 'master_plan', dayId), {
-                name: dayObj.name,
-                date: dayObj.date,
-                sessions: dayObj.sessions || [],
-                createdAt: serverTimestamp()
-              });
-            }
-            return updateDoc(doc(db, 'master_plan', dayId), {
-              sessions: dayObj.sessions || []
+            return safeUpdateMasterPlanDay(dayId, {
+              name: dayObj.name || '',
+              date: dayObj.date || '',
+              sessions: dayObj.sessions || [],
             });
           })
         );
@@ -19793,7 +19779,7 @@ export default function Dashboard() {
                             onChange={async (e) => {
                               const className = e.target.value;
                               if (currentSchedule) {
-                                await updateDoc(doc(db, 'schedules', currentSchedule.id), { className });
+                                await setDoc(doc(db, 'schedules', currentSchedule.id), { className }, { merge: true });
                               } else {
                                 // If no schedule exists, we'll wait for supervisor selection to create it
                                 // or we can create a partial one if needed. Let's just update if exists for now.
@@ -19832,7 +19818,7 @@ export default function Dashboard() {
                               const subjectId = subject?.id || '';
 
                               if (currentSchedule) {
-                                await updateDoc(doc(db, 'schedules', currentSchedule.id), { 
+                                await setDoc(doc(db, 'schedules', currentSchedule.id), { 
                                   supervisorEmail: email,
                                   supervisorName: supervisor.username,
                                   subjectId: subjectId,
@@ -19840,7 +19826,7 @@ export default function Dashboard() {
                                   examTitle: selectedSessionForScheduling.name,
                                   masterPlanId: selectedSessionForScheduling.dayId,
                                   sessionIndex: selectedSessionForScheduling.sessionIndex
-                                });
+                                }, { merge: true });
                               } else {
                                 await addDoc(collection(db, 'schedules'), {
                                   supervisorEmail: email,
