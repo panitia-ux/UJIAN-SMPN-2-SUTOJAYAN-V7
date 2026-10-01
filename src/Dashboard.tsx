@@ -822,7 +822,7 @@ export default function Dashboard() {
     { id: 'exams', label: 'Ujian / Exams', icon: <FileText size={24} />, roles: ['admin', 'pengawas'] },
     { id: 'question_bank', label: 'Bank Soal / Archive', icon: <Archive size={24} />, roles: ['admin', 'pengawas'] },
     { id: 'attendance', label: 'Absensi / Attendance', icon: <ClipboardList size={24} />, roles: ['admin', 'pengawas'] },
-    { id: 'violations', label: 'Laporan / Reports', icon: <AlertCircle size={24} />, roles: ['admin', 'pengawas', 'siswa'] },
+    { id: 'violations', label: 'Laporan Pelanggaran / Violations', icon: <AlertCircle size={24} />, roles: ['admin', 'pengawas', 'siswa'] },
     { id: 'custom_portal', label: customPortalConfig.menuTitle || 'Hasil Ujian / Nilai', icon: <FileSpreadsheet size={24} />, roles: ['admin', 'pengawas', 'siswa'] },
     { id: 'settings', label: 'Setelan / Settings', icon: <RefreshCw size={24} />, roles: ['admin'] },
   ];
@@ -2950,30 +2950,53 @@ export default function Dashboard() {
         });
       } catch (e) {}
 
-      const supervisorUid = user?.uid || userProfile?.uid || auth.currentUser?.uid;
-      if (supervisorUid) {
-        try {
-          tokensUnsub = onSnapshot(
-            query(collection(db, 'tokens'), where('createdBy', '==', supervisorUid), limit(100)),
-            (snapshot) => {
-              const fromFs = dedupeById(
-                snapshot.docs
-                  .map(doc => ({ ...doc.data(), id: doc.id }))
-                  .filter((t: any) => !isStaleBundledToken(t))
+      try {
+        tokensUnsub = onSnapshot(
+          query(collection(db, 'tokens'), orderBy('createdAt', 'desc'), limit(150)),
+          (snapshot) => {
+            const fromFs = dedupeById(
+              snapshot.docs
+                .map(doc => ({ ...doc.data(), id: doc.id }))
+                .filter((t: any) => !isStaleBundledToken(t))
+            );
+            setTokens(prev => {
+              const cachedStu = getCachedData('cached_dashboard_studentTokens');
+              let shared: any[] = [];
+              try {
+                const raw = localStorage.getItem('shared_released_tokens_registry');
+                if (raw) {
+                  const p = JSON.parse(raw);
+                  if (Array.isArray(p)) shared = p.filter((t: any) => !isStaleBundledToken(t));
+                }
+              } catch {}
+              const merged = mergeTokenListsWithUsage(prev, cachedStu, shared, fromFs);
+              try { localStorage.setItem('cached_dashboard_tokens', JSON.stringify(merged)); } catch (e) {}
+              return merged;
+            });
+          },
+          (error) => {
+            console.warn("Unified Supervisor Tokens snapshot fallback:", error.message);
+            try {
+              tokensUnsub = onSnapshot(
+                query(collection(db, 'tokens'), limit(150)),
+                (snapshot) => {
+                  const fromFs = dedupeById(
+                    snapshot.docs
+                      .map(doc => ({ ...doc.data(), id: doc.id }))
+                      .filter((t: any) => !isStaleBundledToken(t))
+                  );
+                  setTokens(prev => {
+                    const cachedStu = getCachedData('cached_dashboard_studentTokens');
+                    const merged = mergeTokenListsWithUsage(prev, cachedStu, fromFs);
+                    try { localStorage.setItem('cached_dashboard_tokens', JSON.stringify(merged)); } catch (e) {}
+                    return merged;
+                  });
+                }
               );
-              setTokens(prev => {
-                const cachedStu = getCachedData('cached_dashboard_studentTokens');
-                const merged = mergeTokenListsWithUsage(prev, cachedStu, fromFs);
-                try { localStorage.setItem('cached_dashboard_tokens', JSON.stringify(merged)); } catch (e) {}
-                return merged;
-              });
-            },
-            (error) => {
-              console.warn("Supervisor Tokens snapshot using cache:", error.message);
-            }
-          );
-        } catch (e) {}
-      }
+            } catch (err2) {}
+          }
+        );
+      } catch (e) {}
 
       try {
         violationsUnsub = onSnapshot(
@@ -11140,19 +11163,19 @@ export default function Dashboard() {
             try {
               if (hadPreviousResetEntry) {
                 await withFirestoreTimeout(
-                  updateDoc(doc(db, 'tokens', tokenDoc.id), {
+                  setDoc(doc(db, 'tokens', tokenDoc.id), {
                     usedBy: finalUsedBy,
                     usedByDetails: finalUsedByDetails
-                  }),
-                  2000
+                  }, { merge: true }),
+                  2500
                 );
               } else {
                 await withFirestoreTimeout(
-                  updateDoc(doc(db, 'tokens', tokenDoc.id), {
+                  setDoc(doc(db, 'tokens', tokenDoc.id), {
                     usedBy: arrayUnion(studentUid),
                     usedByDetails: arrayUnion(usagePayload)
-                  }),
-                  2000
+                  }, { merge: true }),
+                  2500
                 );
               }
             } catch (writeErr: any) {
@@ -19474,7 +19497,7 @@ export default function Dashboard() {
                         { id: 'schedule', label: 'Jadwal / Schedule', desc: 'Jadwal sesi dan ruang ujian', icon: <ClipboardList size={16} /> },
                         { id: 'exams', label: 'Ujian / Exams', desc: 'Daftar ujian dan manajemen token', icon: <FileText size={16} /> },
                         { id: 'attendance', label: 'Absensi / Attendance', desc: 'Presensi siswa dan ruang ujian', icon: <ClipboardList size={16} /> },
-                        { id: 'violations', label: 'Laporan / Reports', desc: 'Log kecurangan dan pelanggaran', icon: <AlertCircle size={16} /> },
+                        { id: 'violations', label: 'Laporan Pelanggaran / Violations', desc: 'Log kecurangan dan pelanggaran layar', icon: <AlertCircle size={16} /> },
                         { id: 'custom_portal', label: customPortalConfig.menuTitle || 'Hasil Ujian / Nilai', desc: 'Preview spreadsheet nilai & pengumuman', icon: <FileSpreadsheet size={16} /> }
                       ].map((item) => {
                         const isEnabled = appSettings.supervisorMenus?.[item.id] !== false;
@@ -19523,7 +19546,7 @@ export default function Dashboard() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {[
                         { id: 'schedule', label: 'Jadwal / Schedule', desc: 'Melihat jadwal pelaksanaan ujian', icon: <ClipboardList size={16} /> },
-                        { id: 'violations', label: 'Laporan / Reports', desc: 'Melihat riwayat pelanggaran akun sendiri', icon: <AlertCircle size={16} /> },
+                        { id: 'violations', label: 'Laporan Pelanggaran / Violations', desc: 'Melihat riwayat pelanggaran akun sendiri', icon: <AlertCircle size={16} /> },
                         { id: 'custom_portal', label: customPortalConfig.menuTitle || 'Hasil Ujian / Nilai', desc: 'Melihat daftar nilai ujian & pengumuman', icon: <FileSpreadsheet size={16} /> }
                       ].map((item) => {
                         const isEnabled = appSettings.studentMenus?.[item.id] !== false;
