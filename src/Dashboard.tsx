@@ -539,6 +539,7 @@ export default function Dashboard() {
         seedBundledDataToFirestoreIfEmpty(db);
       }
     }, (error) => {
+      checkAndHandleQuotaError(error);
       console.warn("Settings snapshot notice (using local cache):", error.message);
     });
 
@@ -1444,16 +1445,21 @@ export default function Dashboard() {
       // Helper timeout pendek agar Firebase (Cadangan Ke-2) tidak pernah menahan proses tarik data
       const withQuickFbTimeout = <T,>(promise: Promise<T>, ms = 2500): Promise<T | null> =>
         Promise.race([
-          promise,
+          promise.catch((err) => {
+            checkAndHandleQuotaError(err);
+            return null;
+          }),
           new Promise<null>((resolve) => setTimeout(() => resolve(null), ms))
         ]);
 
       // 1. Tarik paralel dari Google Spreadsheet (Utama - Tanpa Kuota) & Firebase (Cadangan Ke-2 dengan timeout pendek)
+      const isQuotaFull = isFirestoreQuotaExhausted();
       const [sheetRes, catalogSnapRes, usersSnapRes, bundleSnapRes] = await Promise.allSettled([
         fetchMasterFromSpreadsheet(targetUrl, true, db),
-        withQuickFbTimeout(getDoc(doc(db, 'settings', 'roster_catalog')), 2500),
-        withQuickFbTimeout(getDocs(query(collection(db, 'users'), limit(1200))), 2500),
-        withQuickFbTimeout(getDoc(doc(db, 'settings', 'public_bundle')), 2500),
+        !isQuotaFull ? withQuickFbTimeout(getDoc(doc(db, 'settings', 'roster_catalog')), 2500) : Promise.resolve(null),
+        // Hindari query 1200 dokumen individual saat kuota habis untuk menghemat kuota harian
+        !isQuotaFull ? withQuickFbTimeout(getDocs(query(collection(db, 'users'), limit(1200))), 2500) : Promise.resolve(null),
+        !isQuotaFull ? withQuickFbTimeout(getDoc(doc(db, 'settings', 'public_bundle')), 2500) : Promise.resolve(null),
       ]);
 
       // Gabungkan seluruh akun user agar tidak pernah kosong di browser baru
@@ -2436,35 +2442,39 @@ export default function Dashboard() {
         }
       } catch (e) {}
 
-      if (!loadedFromSheet && !loadedFromBundle) {
-        const [examSnap, schedSnap, planSnap] = await Promise.all([
-          getDocs(collection(db, 'exams')),
-          getDocs(collection(db, 'schedules')),
-          getDocs(collection(db, 'master_plan'))
-        ]);
-        const sortedExams = dedupeById(
-          examSnap.docs
-            .map(d => ({ ...d.data(), id: d.id }))
-            .sort((a: any, b: any) => (b.startTime?.toMillis ? b.startTime.toMillis() : 0) - (a.startTime?.toMillis ? a.startTime.toMillis() : 0))
-        );
-        setExams(sortedExams);
-        try { localStorage.setItem('cached_dashboard_exams', JSON.stringify(sortedExams)); } catch (e) {}
+      if (!loadedFromSheet && !loadedFromBundle && !isFirestoreQuotaExhausted()) {
+        try {
+          const [examSnap, schedSnap, planSnap] = await Promise.all([
+            getDocs(collection(db, 'exams')),
+            getDocs(collection(db, 'schedules')),
+            getDocs(collection(db, 'master_plan'))
+          ]);
+          const sortedExams = dedupeById(
+            examSnap.docs
+              .map(d => ({ ...d.data(), id: d.id }))
+              .sort((a: any, b: any) => (b.startTime?.toMillis ? b.startTime.toMillis() : 0) - (a.startTime?.toMillis ? a.startTime.toMillis() : 0))
+          );
+          setExams(sortedExams);
+          try { localStorage.setItem('cached_dashboard_exams', JSON.stringify(sortedExams)); } catch (e) {}
 
-        const sortedSchedules = dedupeById(
-          schedSnap.docs
-            .map(d => ({ ...d.data(), id: d.id }))
-            .sort((a: any, b: any) => (a.startTime?.toMillis ? a.startTime.toMillis() : 0) - (b.startTime?.toMillis ? b.startTime.toMillis() : 0))
-        );
-        setSchedules(sortedSchedules);
-        try { localStorage.setItem('cached_dashboard_schedules', JSON.stringify(sortedSchedules)); } catch (e) {}
+          const sortedSchedules = dedupeById(
+            schedSnap.docs
+              .map(d => ({ ...d.data(), id: d.id }))
+              .sort((a: any, b: any) => (a.startTime?.toMillis ? a.startTime.toMillis() : 0) - (b.startTime?.toMillis ? b.startTime.toMillis() : 0))
+          );
+          setSchedules(sortedSchedules);
+          try { localStorage.setItem('cached_dashboard_schedules', JSON.stringify(sortedSchedules)); } catch (e) {}
 
-        const sortedPlans = dedupeById(
-          planSnap.docs
-            .map(d => ({ ...d.data(), id: d.id }))
-            .sort((a: any, b: any) => (a.date || '').localeCompare(b.date || ''))
-        );
-        setMasterPlan(sortedPlans);
-        try { localStorage.setItem('cached_dashboard_masterPlan', JSON.stringify(sortedPlans)); } catch (e) {}
+          const sortedPlans = dedupeById(
+            planSnap.docs
+              .map(d => ({ ...d.data(), id: d.id }))
+              .sort((a: any, b: any) => (a.date || '').localeCompare(b.date || ''))
+          );
+          setMasterPlan(sortedPlans);
+          try { localStorage.setItem('cached_dashboard_masterPlan', JSON.stringify(sortedPlans)); } catch (e) {}
+        } catch (fbErr: any) {
+          checkAndHandleQuotaError(fbErr);
+        }
       }
 
       const targetUid = rolePreviewMode === 'siswa'
@@ -2635,19 +2645,21 @@ export default function Dashboard() {
         }
 
         // Fallback if public_bundle has not been created yet
-        const [subjSnap, planSnap] = await Promise.all([
-          getDocs(collection(db, 'subjects')),
-          getDocs(collection(db, 'master_plan'))
-        ]);
-        if (!subjSnap.empty) {
-          const subjs = dedupeById(subjSnap.docs.map(doc => ({ ...doc.data(), id: doc.id })));
-          setSubjects(subjs);
-          try { localStorage.setItem('cached_dashboard_subjects', JSON.stringify(subjs)); } catch (e) {}
-        }
-        if (!planSnap.empty) {
-          const plans = dedupeById(planSnap.docs.map(doc => ({ ...doc.data(), id: doc.id })).sort((a: any, b: any) => (a.date || '').localeCompare(b.date || '')));
-          setMasterPlan(plans);
-          try { localStorage.setItem('cached_dashboard_masterPlan', JSON.stringify(plans)); } catch (e) {}
+        if (!isFirestoreQuotaExhausted()) {
+          const [subjSnap, planSnap] = await Promise.all([
+            getDocs(collection(db, 'subjects')),
+            getDocs(collection(db, 'master_plan'))
+          ]);
+          if (!subjSnap.empty) {
+            const subjs = dedupeById(subjSnap.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+            setSubjects(subjs);
+            try { localStorage.setItem('cached_dashboard_subjects', JSON.stringify(subjs)); } catch (e) {}
+          }
+          if (!planSnap.empty) {
+            const plans = dedupeById(planSnap.docs.map(doc => ({ ...doc.data(), id: doc.id })).sort((a: any, b: any) => (a.date || '').localeCompare(b.date || '')));
+            setMasterPlan(plans);
+            try { localStorage.setItem('cached_dashboard_masterPlan', JSON.stringify(plans)); } catch (e) {}
+          }
         }
       } catch (err: any) {
         console.warn("Lookups loaded from cache (Firestore offline or quota exceeded):", err.message);
@@ -2783,44 +2795,47 @@ export default function Dashboard() {
       const fetchStudentFallbackIfEmpty = async () => {
         try {
           const hasCachedExams = (localStorage.getItem('cached_dashboard_exams') || '').length > 5;
-          if (hasCachedExams || exams.length > 0) return;
+          if (hasCachedExams || exams.length > 0 || isFirestoreQuotaExhausted()) return;
 
           const bundleSnap = await getDoc(doc(db, 'settings', 'public_bundle'));
           if (bundleSnap.exists() && applyPublicBundleData(bundleSnap.data())) {
             return;
           }
 
-          const [examSnap, schedSnap] = await Promise.all([
-            getDocs(collection(db, 'exams')),
-            getDocs(collection(db, 'schedules'))
-          ]);
-          if (!examSnap.empty) {
-            const sorted = dedupeById(
-              examSnap.docs
-                .map(doc => ({ ...doc.data(), id: doc.id }))
-                .sort((a: any, b: any) => {
-                  const timeA = a.startTime?.toMillis ? a.startTime.toMillis() : 0;
-                  const timeB = b.startTime?.toMillis ? b.startTime.toMillis() : 0;
-                  return timeB - timeA;
-                })
-            );
-            setExams(sorted);
-            try { localStorage.setItem('cached_dashboard_exams', JSON.stringify(sorted)); } catch (e) {}
-          }
-          if (!schedSnap.empty) {
-            const sorted = dedupeById(
-              schedSnap.docs
-                .map(doc => ({ ...doc.data(), id: doc.id }))
-                .sort((a: any, b: any) => {
-                  const timeA = a.startTime?.toMillis ? a.startTime.toMillis() : 0;
-                  const timeB = b.startTime?.toMillis ? b.startTime.toMillis() : 0;
-                  return timeA - timeB;
-                })
-            );
-            setSchedules(sorted);
-            try { localStorage.setItem('cached_dashboard_schedules', JSON.stringify(sorted)); } catch (e) {}
+          if (!isFirestoreQuotaExhausted()) {
+            const [examSnap, schedSnap] = await Promise.all([
+              getDocs(collection(db, 'exams')),
+              getDocs(collection(db, 'schedules'))
+            ]);
+            if (!examSnap.empty) {
+              const sorted = dedupeById(
+                examSnap.docs
+                  .map(doc => ({ ...doc.data(), id: doc.id }))
+                  .sort((a: any, b: any) => {
+                    const timeA = a.startTime?.toMillis ? a.startTime.toMillis() : 0;
+                    const timeB = b.startTime?.toMillis ? b.startTime.toMillis() : 0;
+                    return timeB - timeA;
+                  })
+              );
+              setExams(sorted);
+              try { localStorage.setItem('cached_dashboard_exams', JSON.stringify(sorted)); } catch (e) {}
+            }
+            if (!schedSnap.empty) {
+              const sorted = dedupeById(
+                schedSnap.docs
+                  .map(doc => ({ ...doc.data(), id: doc.id }))
+                  .sort((a: any, b: any) => {
+                    const timeA = a.startTime?.toMillis ? a.startTime.toMillis() : 0;
+                    const timeB = b.startTime?.toMillis ? b.startTime.toMillis() : 0;
+                    return timeA - timeB;
+                  })
+              );
+              setSchedules(sorted);
+              try { localStorage.setItem('cached_dashboard_schedules', JSON.stringify(sorted)); } catch (e) {}
+            }
           }
         } catch (err: any) {
+          checkAndHandleQuotaError(err);
           console.warn("Student one-shot fetch using local cache:", err?.message || err);
         }
       };
@@ -2918,6 +2933,7 @@ export default function Dashboard() {
             return sorted;
           });
         }, (error) => {
+          checkAndHandleQuotaError(error);
           console.warn("Supervisor Exams snapshot using cache:", error.message);
         });
       } catch (e) {}
@@ -2936,6 +2952,7 @@ export default function Dashboard() {
           setSchedules(sorted);
           try { localStorage.setItem('cached_dashboard_schedules', JSON.stringify(sorted)); } catch (e) {}
         }, (error) => {
+          checkAndHandleQuotaError(error);
           console.warn("Supervisor Schedules snapshot using cache:", error.message);
         });
       } catch (e) {}
@@ -2946,6 +2963,7 @@ export default function Dashboard() {
           setMasterPlan(sorted);
           try { localStorage.setItem('cached_dashboard_masterPlan', JSON.stringify(sorted)); } catch (e) {}
         }, (error) => {
+          checkAndHandleQuotaError(error);
           console.warn("Supervisor Master Plan snapshot using cache:", error.message);
         });
       } catch (e) {}
@@ -2975,6 +2993,7 @@ export default function Dashboard() {
             });
           },
           (error) => {
+            checkAndHandleQuotaError(error);
             console.warn("Unified Supervisor Tokens snapshot fallback:", error.message);
             try {
               tokensUnsub = onSnapshot(
@@ -3015,6 +3034,7 @@ export default function Dashboard() {
             try { localStorage.setItem('cached_dashboard_violations', JSON.stringify(sorted)); } catch (e) {}
           },
           (error) => {
+            checkAndHandleQuotaError(error);
             console.warn("Violations snapshot using cache:", error.message);
           }
         );
@@ -3060,6 +3080,7 @@ export default function Dashboard() {
             return sorted;
           });
         }, (error) => {
+          checkAndHandleQuotaError(error);
           console.warn("Admin Exams snapshot using cache:", error.message);
         });
       } catch (e) {}
@@ -3080,6 +3101,7 @@ export default function Dashboard() {
             try { localStorage.setItem('cached_dashboard_schedules', JSON.stringify(sorted)); } catch (e) {}
           }
         }, (error) => {
+          checkAndHandleQuotaError(error);
           console.warn("Admin Schedules snapshot using cache:", error.message);
         });
       } catch (e) {}
@@ -3092,6 +3114,7 @@ export default function Dashboard() {
             try { localStorage.setItem('cached_dashboard_masterPlan', JSON.stringify(sorted)); } catch (e) {}
           }
         }, (error) => {
+          checkAndHandleQuotaError(error);
           console.warn("Admin Master Plan snapshot using cache:", error.message);
         });
       } catch (e) {}
@@ -3113,6 +3136,7 @@ export default function Dashboard() {
             try { localStorage.setItem('cached_dashboard_violations', JSON.stringify(sorted)); } catch (e) {}
           },
           (error) => {
+            checkAndHandleQuotaError(error);
             console.warn("Admin Violations snapshot using cache:", error.message);
           }
         );
@@ -3140,6 +3164,7 @@ export default function Dashboard() {
             return merged;
           });
         }, (error) => {
+          checkAndHandleQuotaError(error);
           console.warn("Admin Tokens snapshot using cache:", error.message);
         });
       } catch (e) {}

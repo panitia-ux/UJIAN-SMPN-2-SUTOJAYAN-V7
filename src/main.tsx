@@ -32,15 +32,40 @@ if (!(JSON.stringify as any).__circularSafe) {
   JSON.stringify = safeStringify as typeof JSON.stringify;
 }
 
-// Intercept benign @firebase/firestore internal state assertions (e.g. during Remix or rapid listener teardown)
+// Intercept benign @firebase/firestore internal state assertions & Quota Exceeded errors so they don't break app flow
 if (typeof window !== 'undefined') {
+  const isIgnorableFirestoreError = (raw: unknown): boolean => {
+    const text = String(
+      (raw as any)?.message ||
+      (raw as any)?.reason?.message ||
+      (raw as any)?.reason ||
+      (raw as any)?.error?.message ||
+      (raw as any)?.error ||
+      raw ||
+      ''
+    ).toLowerCase();
+
+    return (
+      text.includes('internal assertion failed') ||
+      text.includes('unexpected state') ||
+      text.includes('quota') ||
+      text.includes('resource-exhausted') ||
+      text.includes('resource_exhausted') ||
+      text.includes('free daily read units') ||
+      text.includes('free tier database') ||
+      text.includes('firestore_quota_exhausted')
+    );
+  };
+
   window.addEventListener(
     'error',
     (event) => {
-      const msg = String(event?.message || event?.error?.message || '');
-      if (msg.includes('INTERNAL ASSERTION FAILED') || msg.includes('Unexpected state')) {
+      if (isIgnorableFirestoreError(event.error || event.message)) {
         event.preventDefault();
         event.stopImmediatePropagation();
+        try {
+          sessionStorage.setItem('smpn2_firestore_quota_exhausted_until', String(Date.now() + 60 * 60 * 1000));
+        } catch (e) {}
       }
     },
     true
@@ -48,10 +73,12 @@ if (typeof window !== 'undefined') {
   window.addEventListener(
     'unhandledrejection',
     (event) => {
-      const msg = String(event?.reason?.message || event?.reason || '');
-      if (msg.includes('INTERNAL ASSERTION FAILED') || msg.includes('Unexpected state')) {
+      if (isIgnorableFirestoreError(event.reason)) {
         event.preventDefault();
         event.stopImmediatePropagation();
+        try {
+          sessionStorage.setItem('smpn2_firestore_quota_exhausted_until', String(Date.now() + 60 * 60 * 1000));
+        } catch (e) {}
       }
     },
     true

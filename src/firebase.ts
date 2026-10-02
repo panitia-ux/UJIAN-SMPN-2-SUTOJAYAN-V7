@@ -113,25 +113,21 @@ export const checkAndHandleQuotaError = (err: any): boolean => {
   if (!err) return false;
   const code = String(err?.code || '').toLowerCase();
   const msg = String(err?.message || err || '').toLowerCase();
-  if (code.includes('resource-exhausted') || msg.includes('resource-exhausted') || msg.includes('quota')) {
+  if (
+    code.includes('resource-exhausted') ||
+    code.includes('resource_exhausted') ||
+    msg.includes('resource-exhausted') ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('quota') ||
+    msg.includes('free daily read units') ||
+    msg.includes('free tier database') ||
+    msg.includes('quota limit exceeded')
+  ) {
     markFirestoreQuotaExhausted();
     return true;
   }
   return false;
 };
-
-async function testConnection() {
-  if (isFirestoreQuotaExhausted()) return;
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error: any) {
-    checkAndHandleQuotaError(error);
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Please check your Firebase configuration.');
-    }
-  }
-}
-testConnection();
 
 export const auth = getAuth(app);
 
