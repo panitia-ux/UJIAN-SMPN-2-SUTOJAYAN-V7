@@ -13,7 +13,7 @@ import { db } from './firebase';
 import { doc, getDoc, getDocs, setDoc, collection, query, where, limit } from 'firebase/firestore';
 import { isSuperAdminEmail } from './lib/adminConfig';
 import { DEFAULT_CLASSES } from './lib/classConstants';
-import { fetchMasterFromSpreadsheet, saveSpreadsheetUrlLocally, getSavedSpreadsheetUrl, getBundledAppSettings, sanitizeAppSettingsWithDefaults, getBundledUsers, seedBundledDataToFirestoreIfEmpty, getUpdatedUsersLocally, isDemoUserRecord, canUseInitialOneTimeDemoAdmin, markOneTimeDemoAdminUsed, purgeDemoAccountsEverywhere } from './lib/spreadsheetService';
+import { fetchMasterFromSpreadsheet, SpreadsheetSyncResult, saveSpreadsheetUrlLocally, getSavedSpreadsheetUrl, getBundledAppSettings, sanitizeAppSettingsWithDefaults, getBundledUsers, seedBundledDataToFirestoreIfEmpty, getUpdatedUsersLocally, isDemoUserRecord, canUseInitialOneTimeDemoAdmin, markOneTimeDemoAdminUsed, purgeDemoAccountsEverywhere } from './lib/spreadsheetService';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -177,16 +177,22 @@ function AuthScreen() {
           new Promise<null>((resolve) => setTimeout(() => resolve(null), ms))
         ]);
 
-      // 1. Pemeriksaan Ke-1 (UTAMA): Tarik langsung dari Google Spreadsheet tanpa menunggu Firebase
-      const sheetPromise = fetchMasterFromSpreadsheet(sheetUrl, true, db);
+      // 1. Pemeriksaan Ke-1 (UTAMA): Tarik dari Google Spreadsheet
+      // Untuk 1.000 siswa: jika sudah memiliki cache lokal atau user bawaan dan tidak meminta sync manual (showFeedback=false),
+      // hindari menembak Google Apps Script agar tidak memicu HTTP 429 Concurrency Limit (maks 30 eksekusi bersamaan)
+      const hasExistingUsers = mergedMap.size > 10;
+      const shouldFetchSheet = !hasExistingUsers || showFeedback;
+      const sheetPromise = shouldFetchSheet
+        ? fetchMasterFromSpreadsheet(sheetUrl, false, db)
+        : Promise.resolve<SpreadsheetSyncResult>({ ok: true, users: Array.from(mergedMap.values()), exams: [] });
 
       // 2. Pemeriksaan Ke-2 (CADANGAN): Ambil dari Firebase secara paralel dengan batas waktu 2.5 detik
+      // HINDARI query getDocs(users, limit(1200)) agar tidak membuang 1.200 read units per login siswa!
       const firebaseBackupPromise = !quotaExceeded
         ? Promise.allSettled([
             withQuickTimeout(getDoc(doc(db, 'settings', 'app')), 2500),
             withQuickTimeout(getDoc(doc(db, 'settings', 'public_bundle')), 2500),
             withQuickTimeout(getDoc(doc(db, 'settings', 'roster_catalog')), 2500),
-            withQuickTimeout(getDocs(query(collection(db, 'users'), limit(1200))), 2500),
           ])
         : Promise.resolve(null);
 
@@ -194,7 +200,7 @@ function AuthScreen() {
 
       // Proses Cadangan Ke-2 (Firebase) terlebih dahulu jika tersedia
       if (fbResults.status === 'fulfilled' && Array.isArray(fbResults.value)) {
-        const [appSnap, bundleSnap, catalogRes, usersColRes] = fbResults.value;
+        const [appSnap, bundleSnap, catalogRes] = fbResults.value;
         try {
           const bundleData =
             bundleSnap.status === 'fulfilled' && bundleSnap.value && (bundleSnap.value as any).exists?.()
@@ -231,10 +237,6 @@ function AuthScreen() {
             if (Array.isArray(cData?.users)) {
               addUsersToMap(cData.users);
             }
-          }
-          if (usersColRes.status === 'fulfilled' && usersColRes.value && !(usersColRes.value as any).empty) {
-            const uDocs = (usersColRes.value as any).docs.map((d: any) => ({ id: d.id, uid: d.id, ...d.data() }));
-            addUsersToMap(uDocs);
           }
         } catch (e) {}
       }

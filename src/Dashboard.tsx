@@ -2400,7 +2400,7 @@ export default function Dashboard() {
     try {
       let loadedFromSheet = false;
       try {
-        const sheetRes = await fetchMasterFromSpreadsheet(appSettings?.spreadsheetWebAppUrl, true, db);
+        const sheetRes = await fetchMasterFromSpreadsheet(appSettings?.spreadsheetWebAppUrl, !silent, db);
         if (sheetRes.ok) {
           if (Array.isArray(sheetRes.exams) && sheetRes.exams.length > 0) {
             const normalizedSheetExams = sheetRes.exams.map((pe: any) => ({
@@ -2587,7 +2587,7 @@ export default function Dashboard() {
         // PEMERIKSAAN KE-1 (UTAMA): Cek Google Spreadsheet untuk DATA_USER, DATA_SOAL & KONFIGURASI (0 Read Firebase)
         let loadedExamsFromSheet = false;
         try {
-          const sheetRes = await fetchMasterFromSpreadsheet(appSettings?.spreadsheetWebAppUrl, true, db);
+          const sheetRes = await fetchMasterFromSpreadsheet(appSettings?.spreadsheetWebAppUrl, false, db);
           if (sheetRes.ok) {
             if (Array.isArray(sheetRes.users) && sheetRes.users.length > 0) {
               setUsers(sheetRes.users);
@@ -10853,7 +10853,7 @@ export default function Dashboard() {
         // Jika daftar ujian di HP siswa masih kosong/belum sinkron, segarkan dari Spreadsheet (Pemeriksaan Ke-1) & public_bundle (Pemeriksaan Ke-2)
         if (!smartMatchedExam) {
           try {
-            const sheetRes = await fetchMasterFromSpreadsheet(appSettings?.spreadsheetWebAppUrl, true);
+            const sheetRes = await fetchMasterFromSpreadsheet(appSettings?.spreadsheetWebAppUrl, false);
             if (sheetRes.ok && Array.isArray(sheetRes.exams) && sheetRes.exams.length > 0) {
               workingExamsList = sheetRes.exams;
               setExams(sheetRes.exams);
@@ -21277,10 +21277,18 @@ export default function Dashboard() {
                   className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
                   value={selectedExamForEdit.googleFormLink || ''}
                   onChange={(e) => setSelectedExamForEdit({...selectedExamForEdit, googleFormLink: e.target.value})}
+                  placeholder="https://docs.google.com/forms/d/e/.../viewform"
                 />
-                <p className="text-[10px] text-gray-400 mt-1">
-                  *Gunakan link "Kirim" -{'>'} "Sematkan HTML" (ambil URL-nya saja) atau link "Pratinjau".
-                </p>
+                {(selectedExamForEdit.googleFormLink || '').includes('forms.gle') && (
+                  <p className="text-[11px] text-amber-600 bg-amber-50 p-2 rounded-lg mt-1 font-semibold border border-amber-200">
+                    ⚠️ Hindari tautan pendek forms.gle. Gunakan tautan lengkap docs.google.com/forms/d/e/... dari menu 'Kirim' Google Form agar tidak terblokir di frame HP siswa.
+                  </p>
+                )}
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-2.5 mt-2 text-[11px] text-blue-900 space-y-1">
+                  <p className="font-bold flex items-center gap-1">🛡️ Syarat Wajib Google Form Anti-Macet di HP Siswa:</p>
+                  <p>1. Buka <strong>Setelan</strong> Google Form → bagian <strong>Jawaban</strong> → <strong>Matikan</strong> opsi <em>'Batasi untuk pengguna di organisasi'</em>.</p>
+                  <p>2. Pastikan <em>'Kumpulkan alamat email'</em> diatur ke <strong>Jangan kumpulkan</strong> (agar siswa tidak dipaksa login Google di dalam frame).</p>
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -22035,12 +22043,18 @@ export default function Dashboard() {
                   className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
                   value={newExam.link}
                   onChange={(e) => setNewExam({...newExam, link: e.target.value})}
-                  placeholder="https://docs.google.com/forms/..."
+                  placeholder="https://docs.google.com/forms/d/e/.../viewform"
                 />
-                <p className="text-[10px] text-gray-400 mt-1">
-                  *Gunakan link "Kirim" -{'>'} "Sematkan HTML" (ambil URL-nya saja) atau link "Pratinjau". 
-                  Pastikan form diatur "Publik" atau siswa sudah login Google.
-                </p>
+                {(newExam.link || '').includes('forms.gle') && (
+                  <p className="text-[11px] text-amber-600 bg-amber-50 p-2 rounded-lg mt-1 font-semibold border border-amber-200">
+                    ⚠️ Hindari tautan pendek forms.gle. Gunakan tautan lengkap docs.google.com/forms/d/e/... dari menu 'Kirim' Google Form agar tidak terblokir di frame HP siswa.
+                  </p>
+                )}
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-2.5 mt-2 text-[11px] text-blue-900 space-y-1">
+                  <p className="font-bold flex items-center gap-1">🛡️ Syarat Wajib Google Form Anti-Macet di HP Siswa:</p>
+                  <p>1. Buka <strong>Setelan</strong> Google Form → bagian <strong>Jawaban</strong> → <strong>Matikan</strong> opsi <em>'Batasi untuk pengguna di organisasi'</em>.</p>
+                  <p>2. Pastikan <em>'Kumpulkan alamat email'</em> diatur ke <strong>Jangan kumpulkan</strong> (agar siswa tidak dipaksa login Google di dalam frame).</p>
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>

@@ -827,20 +827,26 @@ export default function ExamRoom({ exam, onExit }: ExamRoomProps) {
 
     // Google Forms handling
     if (processedUrl.includes('docs.google.com/forms')) {
-      // Convert /edit or /viewform to the embedded version if possible
-      // But /viewform is usually fine, /edit is not.
-      if (processedUrl.includes('/edit')) {
-        processedUrl = processedUrl.replace('/edit', '/viewform');
-      }
-      
-      // Ensure embedded=true for better iframe experience
-      if (!processedUrl.includes('embedded=true')) {
-        processedUrl = processedUrl.includes('?') 
-          ? `${processedUrl}&embedded=true` 
-          : `${processedUrl}?embedded=true`;
+      try {
+        // Normalisasi path agar selalu berakhir pada /viewform?embedded=true
+        if (processedUrl.includes('/edit')) {
+          processedUrl = processedUrl.replace(/\/edit(\?.*)?$/, '/viewform');
+        } else if (processedUrl.includes('/formResponse')) {
+          processedUrl = processedUrl.replace(/\/formResponse(\?.*)?$/, '/viewform');
+        }
+        
+        const urlObj = new URL(processedUrl);
+        urlObj.searchParams.set('embedded', 'true');
+        processedUrl = urlObj.toString();
+      } catch (e) {
+        if (!processedUrl.includes('embedded=true')) {
+          processedUrl = processedUrl.includes('?') 
+            ? `${processedUrl}&embedded=true` 
+            : `${processedUrl}?embedded=true`;
+        }
       }
     } else if (processedUrl.includes('forms.gle/')) {
-      console.warn("Shortened Google Forms links (forms.gle) may not work in iframes. Please use the full URL from the 'Send' dialog.");
+      console.warn("Shortened Google Forms links (forms.gle) may not work reliably in iframes. Please use the full URL from the 'Send' dialog.");
     }
     
     return processedUrl;
@@ -935,7 +941,7 @@ export default function ExamRoom({ exam, onExit }: ExamRoomProps) {
             </span>
             <span className="text-red-300 font-bold shrink-0">Pelanggaran: {violationCount}</span>
           </div>
-          {(exam.isSimulation || /uji\s*coba|simulasi/i.test(exam.title || '') || userProfile?.role === 'admin' || userProfile?.role === 'pengawas') && (
+          {Boolean(exam.isSimulation && (userProfile?.role === 'admin' || userProfile?.role === 'pengawas')) && (
             <div className="flex items-center justify-between gap-1.5 pt-1 border-t border-gray-700">
               <span className="text-[10px] font-bold text-amber-300 flex items-center gap-1">
                 <Sparkles size={11} className="text-amber-400" /> Mode Uji Coba
@@ -1003,7 +1009,7 @@ export default function ExamRoom({ exam, onExit }: ExamRoomProps) {
             <span className="text-sm font-medium text-red-200">Pelanggaran: {violationCount}</span>
           </div>
           
-          {(exam.isSimulation || /uji\s*coba|simulasi/i.test(exam.title || '') || userProfile?.role === 'admin' || userProfile?.role === 'pengawas') && (
+          {Boolean(exam.isSimulation && (userProfile?.role === 'admin' || userProfile?.role === 'pengawas')) && (
             <div className="flex items-center gap-1.5 bg-amber-500/20 border border-amber-400/50 px-2.5 py-1 rounded-lg">
               <Sparkles size={13} className="text-amber-400 shrink-0" />
               <span className="text-[11px] font-bold text-amber-300">Mode Uji Coba</span>
@@ -1306,7 +1312,8 @@ export default function ExamRoom({ exam, onExit }: ExamRoomProps) {
                 pointerEvents: exitCountdown || showFinishConfirm ? 'none' : 'auto',
               }}
               title="Exam Content"
-              referrerPolicy="no-referrer"
+              referrerPolicy="strict-origin-when-cross-origin"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             />
           )

@@ -994,36 +994,75 @@ export const resolveSpreadsheetUrl = async (
   return DEFAULT_SPREADSHEET_WEBAPP_URL;
 };
 
+let cachedSpreadsheetSyncResult: SpreadsheetSyncResult | null = null;
+let lastSpreadsheetSyncTimestamp = 0;
+let inFlightSpreadsheetPromise: Promise<SpreadsheetSyncResult> | null = null;
+let gasThrottledUntil = 0;
+
 /**
  * PEMERIKSAAN KE-1 (BACA DARI GOOGLE SPREADSHEET):
  * Mengambil seluruh DATA_USER dan DATA_SOAL langsung dari Google Spreadsheet (Tanpa Kuota).
  * Otomatis mencari URL dari Firestore jika dibuka di browser/perangkat baru.
+ * Dilengkapi proteksi deduplikasi request dan circuit-breaker agar 1.000 siswa tidak memicu HTTP 429.
  */
 export const fetchMasterFromSpreadsheet = async (
   webAppUrl?: string,
   force = true,
   dbInstance?: any
 ): Promise<SpreadsheetSyncResult> => {
-  const targetUrl = await resolveSpreadsheetUrl(webAppUrl, dbInstance);
-  if (!targetUrl) {
-    return { ok: false, message: 'URL Google Apps Script belum diatur.' };
+  // 1. Jika tidak dipaksa dan data di memori masih segar (< 3 menit), kembalikan langsung tanpa request HTTP
+  if (!force && cachedSpreadsheetSyncResult && (Date.now() - lastSpreadsheetSyncTimestamp < 3 * 60 * 1000)) {
+    return cachedSpreadsheetSyncResult;
   }
 
-  try {
-    const sep = targetUrl.includes('?') ? '&' : '?';
-    const res = await fetchWithTimeout(`${targetUrl}${sep}action=getAll&_t=${Date.now()}`, {
-      method: 'GET',
-      redirect: 'follow',
-    }, 20000);
+  // 2. Jika sedang ada request yang berjalan (in-flight), gunakan kembali promise tersebut (Deduplication)
+  if (!force && inFlightSpreadsheetPromise) {
+    return inFlightSpreadsheetPromise;
+  }
 
-    if (!res.ok) {
-      return { ok: false, message: `HTTP ${res.status}` };
+  // 3. Circuit breaker jika Google Apps Script sebelumnya mengirimkan status 429 / 503 (Throttling)
+  if (!force && Date.now() < gasThrottledUntil) {
+    if (cachedSpreadsheetSyncResult) return cachedSpreadsheetSyncResult;
+    try {
+      const cachedUsersStr = localStorage.getItem('cached_roster_catalog') || localStorage.getItem('cached_dashboard_users');
+      const cachedExamsStr = localStorage.getItem('cached_dashboard_exams');
+      if (cachedUsersStr || cachedExamsStr) {
+        return {
+          ok: true,
+          users: cachedUsersStr ? JSON.parse(cachedUsersStr) : [],
+          exams: cachedExamsStr ? JSON.parse(cachedExamsStr) : [],
+          message: 'Menggunakan data cache lokal (Google Apps Script cooldown)',
+        };
+      }
+    } catch (e) {}
+  }
+
+  const executeFetch = async (): Promise<SpreadsheetSyncResult> => {
+    const targetUrl = await resolveSpreadsheetUrl(webAppUrl, dbInstance);
+    if (!targetUrl) {
+      return { ok: false, message: 'URL Google Apps Script belum diatur.' };
     }
 
-    const data = await res.json();
-    if (!data || data.status !== 'ok') {
-      return { ok: false, message: data?.message || 'Respons Spreadsheet tidak valid.' };
-    }
+    try {
+      const sep = targetUrl.includes('?') ? '&' : '?';
+      // Untuk mengurangi beban konkurensi 1.000 siswa, jangan gunakan timestamp acak setiap milidetik jika force=false
+      const cacheBustParam = force ? `_t=${Date.now()}` : `_v=${Math.floor(Date.now() / 60000)}`;
+      const res = await fetchWithTimeout(`${targetUrl}${sep}action=getAll&${cacheBustParam}`, {
+        method: 'GET',
+        redirect: 'follow',
+      }, 20000);
+
+      if (!res.ok) {
+        if (res.status === 429 || res.status === 503) {
+          gasThrottledUntil = Date.now() + 3 * 60 * 1000; // Cooldown 3 menit
+        }
+        return { ok: false, message: `HTTP ${res.status}` };
+      }
+
+      const data = await res.json();
+      if (!data || data.status !== 'ok') {
+        return { ok: false, message: data?.message || 'Respons Spreadsheet tidak valid.' };
+      }
 
     const rawSheetUsers: any[] = Array.isArray(data.users)
       ? data.users
@@ -1246,12 +1285,24 @@ export const fetchMasterFromSpreadsheet = async (
       updatedAt: data.updatedAt || new Date().toISOString(),
       message: `Berhasil memuat ${users.length} akun & ${exams.length} ujian dari Google Spreadsheet.`,
     };
-  } catch (err: any) {
-    return {
-      ok: false,
-      message: err?.message || 'Gagal menghubungi Google Spreadsheet, beralih ke Pemeriksaan Ke-2 (Firebase).',
-    };
+    } catch (err: any) {
+      return {
+        ok: false,
+        message: err?.message || 'Gagal menghubungi Google Spreadsheet, beralih ke Pemeriksaan Ke-2 (Firebase).',
+      };
+    }
+  };
+
+  inFlightSpreadsheetPromise = executeFetch().finally(() => {
+    inFlightSpreadsheetPromise = null;
+  });
+
+  const finalResult = await inFlightSpreadsheetPromise;
+  if (finalResult.ok) {
+    cachedSpreadsheetSyncResult = finalResult;
+    lastSpreadsheetSyncTimestamp = Date.now();
   }
+  return finalResult;
 };
 
 /**

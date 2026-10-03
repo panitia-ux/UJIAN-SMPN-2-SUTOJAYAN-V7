@@ -78,15 +78,17 @@ export const toSpreadsheetPreviewUrl = (rawUrl: string): string => {
 
   try {
     if (trimmed.includes('/spreadsheets/d/e/') && trimmed.includes('/pubhtml')) {
-      return trimmed;
+      const glue = trimmed.includes('?') ? '&' : '?';
+      return trimmed.includes('widget=true') ? trimmed : `${trimmed}${glue}widget=true&headers=false`;
     }
 
     const gidMatch = trimmed.match(/[?#&]gid=([0-9]+)/i);
-    const gidParam = gidMatch ? `?gid=${gidMatch[1]}` : '';
+    const gidParam = gidMatch ? `gid=${gidMatch[1]}` : '';
 
     const sheetMatch = trimmed.match(/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/i);
     if (sheetMatch && sheetMatch[1] && sheetMatch[1] !== 'e') {
-      return `https://docs.google.com/spreadsheets/d/${sheetMatch[1]}/preview${gidParam}`;
+      const gidPart = gidParam ? `&${gidParam}` : '';
+      return `https://docs.google.com/spreadsheets/d/${sheetMatch[1]}/preview?widget=true&headers=false${gidPart}`;
     }
 
     const docMatch = trimmed.match(/docs\.google\.com\/document\/d\/([a-zA-Z0-9-_]+)/i);
@@ -1849,6 +1851,8 @@ export const ExamResultsAndAnnouncementPortal: React.FC<ExamResultsAndAnnounceme
                     className={`w-full border-0 bg-white ${
                       isFullscreenPreview ? 'h-[calc(100vh-140px)]' : 'h-[72vh] min-h-[520px]'
                     }`}
+                    sandbox="allow-scripts allow-same-origin allow-forms"
+                    referrerPolicy="strict-origin-when-cross-origin"
                     allowFullScreen
                   />
                 </div>
@@ -1967,6 +1971,8 @@ export const StartupAnnouncementPopupModal: React.FC<StartupAnnouncementPopupMod
                 src={currentItem.embedUrl}
                 title={currentItem.title}
                 className="w-full h-[55vh] min-h-[360px] border-0"
+                sandbox="allow-scripts allow-same-origin allow-forms"
+                referrerPolicy="strict-origin-when-cross-origin"
                 allowFullScreen
               />
             </div>
