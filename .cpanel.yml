@@ -2,5 +2,5 @@
 deployment:
   tasks:
     - export DEPLOYPATH=/home/smpnsuto/public_html/ujian/
-    - rsync -av --exclude='.git/' --exclude='.env' --exclude='storage/logs/' ./ $DEPLOYPATH
+    - rsync -av --exclude='.git/' --exclude='.env' ./ $DEPLOYPATH
     - cd $DEPLOYPATH && chmod -R 775 ./
