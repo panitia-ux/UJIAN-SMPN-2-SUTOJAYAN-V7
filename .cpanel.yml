@@ -1,9 +1,8 @@
 ---
 deployment:
   tasks:
-    - export DEPLOYPATH=/home/smpnsuto/public_html/portal/
+    - export DEPLOYPATH=/home/smpnsuto/public_html/ujian/
     - /bin/mkdir -p $DEPLOYPATH
-    - /bin/rsync -av --exclude='.git/' --exclude='.next/' --exclude='node_modules/' --exclude='.env*' ./ $DEPLOYPATH
-    - cd $DEPLOYPATH && npm install
-    - cd $DEPLOYPATH && npm run build
-    - touch $DEPLOYPATH/tmp/restart.txt
+    - npm install
+    - npm run build
+    - /bin/rsync -av --delete dist/ $DEPLOYPATH
