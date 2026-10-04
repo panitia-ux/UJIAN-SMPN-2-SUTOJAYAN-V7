@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <script>
+      (function () {
+        var origStringify = JSON.stringify;
+        JSON.stringify = function (value, replacer, space) {
+          try {
+            return origStringify.call(JSON, value, replacer, space);
+          } catch (err) {
+            if (err && err instanceof TypeError) {
+              var seen = new WeakSet();
+              return origStringify.call(
+                JSON,
+                value,
+                function (key, val) {
+                  if (typeof val === 'object' && val !== null) {
+                    if (seen.has(val)) return '[Circular]';
+                    seen.add(val);
+                  }
+                  return typeof replacer === 'function' ? replacer.call(this, key, val) : val;
+                },
+                space
+              );
+            }
+            throw err;
+          }
+        };
+        window.addEventListener('error', function (event) {
+          var msg = String((event && (event.message || (event.error && event.error.message))) || '');
+          if (msg.indexOf('INTERNAL ASSERTION FAILED') !== -1 || msg.indexOf('Unexpected state') !== -1) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        }, true);
+        window.addEventListener('unhandledrejection', function (event) {
+          var reason = event && event.reason;
+          var msg = String((reason && (reason.message || reason)) || '');
+          if (msg.indexOf('INTERNAL ASSERTION FAILED') !== -1 || msg.indexOf('Unexpected state') !== -1) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        }, true);
+      })();
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CBT Ujian Sekolah - SMPN 2 Sutojayan</title>
+    <meta name="description" content="Aplikasi Ujian Sekolah & Asesmen Berbasis Komputer Anti-Curang SMP Negeri 2 Sutojayan." />
+    <meta property="og:title" content="CBT Ujian Sekolah - SMPN 2 Sutojayan" />
+    <meta property="og:description" content="Aplikasi Ujian Sekolah & Asesmen Berbasis Komputer Anti-Curang SMP Negeri 2 Sutojayan." />
+    <script type="module" crossorigin src="/assets/index-CtnLdQZB.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/vendor-react-BHP_-sj4.js">
+    <link rel="modulepreload" crossorigin href="/assets/vendor-export-CZtiAyeR.js">
+    <link rel="modulepreload" crossorigin href="/assets/vendor-firebase-B_TToIqF.js">
+    <link rel="modulepreload" crossorigin href="/assets/data-school-DIRN_u2j.js">
+    <link rel="modulepreload" crossorigin href="/assets/vendor-icons-B4I8DF3F.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-BlurNm-P.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
+
