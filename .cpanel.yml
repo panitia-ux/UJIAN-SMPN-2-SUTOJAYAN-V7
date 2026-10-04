@@ -1,8 +1,7 @@
 ---
 deployment:
   tasks:
-    - export DEPLOYPATH=/home/smpnsuto/public_html/exam
+    - export DEPLOYPATH=/home/u7149453/public_html/exams.smpn2sutojayan.sch.id
     - /bin/mkdir -p $DEPLOYPATH
-    - source /home/smpnsuto/nodevenv/exam/20/bin/activate && npm install --no-audit --no-fund --prefer-offline && NODE_OPTIONS="--max-old-space-size=512" npm run build
     - /bin/cp -R dist/* $DEPLOYPATH/
-    - /bin/cp .htaccess $DEPLOYPATH/
+    # - /bin/cp .htaccess $DEPLOYPATH/
