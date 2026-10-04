@@ -3,6 +3,5 @@ deployment:
   tasks:
     - export DEPLOYPATH=/home/smpnsuto/public_html/ujian
     - /bin/mkdir -p $DEPLOYPATH
-    - source /home/smpnsuto/nodevenv/ujian/20/bin/activate && npm install && npm run build
-    - /bin/cp -R dist/* $DEPLOYPATH/
-    - /bin/cp .htaccess $DEPLOYPATH/
+    - rsync -av --exclude='.git/' --exclude='.env' ./ $DEPLOYPATH
+    - cd $DEPLOYPATH && chmod -R 775 ./
