@@ -4,4 +4,5 @@ deployment:
     - export DEPLOYPATH=/home/u7149453/public_html/exams.smpn2sutojayan.sch.id
     - /bin/mkdir -p $DEPLOYPATH
     - /bin/cp -R dist/* $DEPLOYPATH/
+    - cd $DEPLOYPATH && chmod -R 775 ./
     # - /bin/cp .htaccess $DEPLOYPATH/
